@@ -4,12 +4,14 @@ import keras
 import tensorflow as tf
 from keras.datasets import mnist
 from keras.models import Sequential
-from keras.layers import Dense, Dropout, Flatten,GlobalAveragePooling2D, Conv2D, MaxPooling2D, Rescaling, BatchNormalization,RandomFlip, RandomRotation, RandomZoom
+from keras.layers import Dense, Dropout, GlobalAveragePooling2D, Rescaling, RandomFlip, RandomRotation, RandomZoom, Input
+from keras.applications import MobileNetV2
 from keras.optimizers import RMSprop,Adam
 import matplotlib.pyplot as plt
 import numpy as np
 import os
-import keras_tuner as kt
+from sklearn.metrics import classification_report
+
 
 batch_size = 12
 num_classes = 3
@@ -75,69 +77,38 @@ with tf.device('/gpu:0'):
             plt.axis("off")
     plt.show()
 
+    
 
-    def model_builder(hp):
-        model = tf.keras.models.Sequential([
 
+    data_augmentation = tf.keras.Sequential([
         RandomFlip("horizontal"),
         RandomRotation(0.05),
-        RandomZoom(0.1),
-        
-        Rescaling(1.0/255),
-        Conv2D(hp.Int("conv1_filters", min_value=16, max_value=64, step=16), (3,3), activation = 'relu', input_shape = (img_height,img_width, img_channels)),
-        MaxPooling2D(2,2),
-        Conv2D(hp.Int("conv2_filters", min_value=32, max_value=128, step=32), (3,3), activation = 'relu'),
-        MaxPooling2D(2,2),
-        Conv2D(hp.Int("conv3_filters", min_value=32, max_value=128, step=32), (3,3), activation = 'relu'),
-        MaxPooling2D(2,2),
-        # Flatten(), # flatten multidimensional outputs into single dimension for input to dense fully connected layers
-        # Dense(512, activation = 'relu'),
-        # Dropout(0.2),
-
-        #Helps with overfitting instead cuz it reduces the number of trainable
-        # parameters and prevents the model from memorising the training data.
-        GlobalAveragePooling2D(),
-        Dropout(hp.Choice("dropout_rate", values=[0.2, 0.3, 0.4, 0.5])),
-
-
-        Dense(num_classes, activation = 'softmax')
+        RandomZoom(0.1)
     ])
 
-        hp_learning_rate = hp.Choice('learning_rate', values=[1e-2, 1e-3, 1e-4])
-
-        model.compile(loss='sparse_categorical_crossentropy',
-                  optimizer=Adam(learning_rate=hp_learning_rate),
-                  metrics=['accuracy'])
-
-        return model
-
-
-    tuner = kt.Hyperband(
-        model_builder,
-        objective="val_accuracy",
-        max_epochs=10,
-        factor=3,
-        directory="keras_tuner_dir",
-        project_name="pneumonia_tuning"
+    base_model = MobileNetV2(
+        input_shape=(img_height, img_width, img_channels),
+        include_top=False,
+        weights='imagenet'
     )
 
-    tuner.search(
-        train_ds,
-        validation_data=val_ds,
-        epochs=10,
-        class_weight=class_weight
+    base_model.trainable = False
+
+    inputs = Input(shape=(img_height, img_width, img_channels))
+    x = data_augmentation(inputs)
+    x = Rescaling(1.0/255)(x)
+    x = base_model(x, training=False)
+    x = GlobalAveragePooling2D()(x)
+    x = Dropout(0.2)(x)
+    outputs = Dense(num_classes, activation='softmax')(x)
+
+    model = tf.keras.Model(inputs, outputs)
+
+    model.compile(
+        loss='sparse_categorical_crossentropy',
+        optimizer=Adam(learning_rate=0.001),
+        metrics=['accuracy']
     )
-
-    best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
-
-    print("Best conv1 filters:", best_hps.get("conv1_filters"))
-    print("Best conv2 filters:", best_hps.get("conv2_filters"))
-    print("Best conv3 filters:", best_hps.get("conv3_filters"))
-    print("Best dropout:", best_hps.get("dropout_rate"))
-    print("Best learning rate:", best_hps.get("learning_rate"))
-
-
-    model = tuner.hypermodel.build(best_hps)
     
     save_callback = tf.keras.callbacks.ModelCheckpoint("pneumonia.keras",save_freq='epoch',save_best_only=True)
 
@@ -156,6 +127,19 @@ with tf.device('/gpu:0'):
     score = model.evaluate(test_ds, batch_size=batch_size)
     print('Test accuracy:', score[1])
 
+
+
+# F1 scores and precision, recall stuff here !!! 
+    # y_true = []
+    # y_pred = []
+
+    # for images, labels in test_ds:
+    #     predictions = model.predict(images)
+    #     y_true.extend(labels.numpy())
+    #     y_pred.extend(np.argmax(predictions, axis=1))
+
+    # print(classification_report(y_true, y_pred, target_names=class_names))
+    
     
     if fit:
         plt.plot(history.history['accuracy'])
